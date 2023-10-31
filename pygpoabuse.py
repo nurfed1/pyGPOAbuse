@@ -36,10 +36,10 @@ parser.add_argument('-ldaps', action='store_true', help='Use LDAPS instead of LD
 parser.add_argument('-ccache', action='store', help='ccache file name (must be in local directory)')
 parser.add_argument('-v', action='count', default=0, help='Verbosity level (-v or -vv)')
 
-action_subparsers = parser.add_subparsers(dest="action", help="action", required=True)
+method_subparsers = parser.add_subparsers(dest="method", help="method", required=True)
 
 # scheduled task subparser
-scheduled_task_parser = action_subparsers.add_parser("scheduled_task", help="Add scheduled task")
+scheduled_task_parser = method_subparsers.add_parser("scheduled_task", help="Add scheduled task")
 scheduled_task_parser.add_argument('-taskname', action='store', help='Taskname to create. (Default: TASK_<random>)')
 scheduled_task_parser.add_argument('-mod-date', action='store', help='Task modification date (Default: 30 days before)')
 scheduled_task_parser.add_argument('-description', action='store', help='Task description (Default: Empty)')
@@ -48,15 +48,17 @@ scheduled_task_parser.add_argument('-command', action='store', help='Command to 
 scheduled_task_parser.add_argument('-f', action='store_true', help='Force add ScheduleTask')
 
 # Create file subparser
-create_file_parser = action_subparsers.add_parser("file", help="Create file")
+create_file_parser = method_subparsers.add_parser("file", help="Create file")
 create_file_parser.add_argument('-source-path', '-s', nargs=1, type=str, action='store', required=True, help='Source file path to be copied')
-create_file_parser.add_argument('-destination-path', '-d', nargs=1, type=str, action='store', required=True, help='destionation file path')
+create_file_parser.add_argument('-destination-path', '-d', nargs=1, type=str, action='store', required=True, help='destination file path')
+create_file_parser.add_argument('-action', '-a', nargs=1, type=str, action='store', choices=['create', 'replace', 'update', 'delete'], required=True, help='Action')
 create_file_parser.add_argument('-mod-date', action='store', help='Task modification date (Default: 30 days before)')
 create_file_parser.add_argument('-f', action='store_true', help='Force add File')
 
 # Restart service subparser
-restart_service_parser = action_subparsers.add_parser("service", help="Restart service")
+restart_service_parser = method_subparsers.add_parser("service", help="Restart service")
 restart_service_parser.add_argument('-service-name', '-s', nargs=1, type=str, action='store', required=True, help='The name of the service')
+restart_service_parser.add_argument('-action', '-a', nargs=1, type=str, action='store', choices=['start', 'restart', 'stop'], required=True, help='Action')
 restart_service_parser.add_argument('-mod-date', action='store', help='Task modification date (Default: 30 days before)')
 restart_service_parser.add_argument('-f', action='store_true', help='Force add Service')
 
@@ -138,7 +140,7 @@ except Exception:
 
 try:
     gpo = GPO(smb_session, ldap_url)
-    if options.action == 'scheduled_task':
+    if options.method == 'scheduled_task':
         result = gpo.update_scheduled_task(
             domain=domain,
             gpo_id=options.gpo_id,
@@ -152,19 +154,20 @@ try:
         )
         if result:
             logging.success(f"ScheduledTask {options.taskname} created!")
-    elif options.action == 'file':
+    elif options.method == 'file':
         result = gpo.update_file(
             domain=domain,
             gpo_id=options.gpo_id,
             gpo_type=options.gpo_type,
             source_path=options.source_path[0],
             destination_path=options.destination_path[0],
+            action=options.action[0],
             mod_date=options.mod_date,
             force=options.f
         )
         if result:
             logging.success("File gpo created!")
-    elif options.action == 'service':
+    elif options.method == 'service':
         if options.gpo_type == 'User':
             raise Exception('gpo type User is not supported for services')
 
@@ -173,6 +176,7 @@ try:
             gpo_id=options.gpo_id,
             gpo_type=options.gpo_type,
             service_name=options.service_name[0],
+            action=options.action[0],
             mod_date=options.mod_date,
             force=options.f
         )
