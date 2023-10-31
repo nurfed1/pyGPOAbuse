@@ -1,19 +1,22 @@
 import asyncio
 import logging
 import re
+from pygpoabuse.ldap import Ldap
 from pygpoabuse.scheduledtask import ScheduledTask
 from pygpoabuse.file import File
-from pygpoabuse.ldap import Ldap
+from pygpoabuse.service import Service
 
 
 class GPO:
     extension_guids = {
         'scheduled_task': '{CAB54552-DEEA-4691-817E-ED4A4D1AFC72}',
         'file': '{3BAE7E51-E3F4-41D0-853D-9BB9FD47605F}',
+        'service': '{CC5746A9-9B74-4be5-AE2E-64379C86E0E4}',
     }
     cse_guids = {
         'scheduled_task': '{AADCED64-746C-4633-A97C-D61349046527}',
         'file': '{7150F9BF-48AD-4DA4-A49C-29EF4A8369BA}',
+        'service': '{91FBB303-0CD5-4055-BF42-E512A681B325}',
     }
 
     def __init__(self, smb_session, ldap_url):
@@ -21,8 +24,6 @@ class GPO:
         self._ldap_url = ldap_url
 
     def update_extension_names(self, extension_type, extension_names):
-        # extension format:
-        # [{nullguid}{extension_guid1}{extension_guid2}][{cse_guid1}{extension_guid1}][{cse_guid2}{extension_guid2}]
         nullguid = "{00000000-0000-0000-0000-000000000000}"
 
         extension_guid = self.extension_guids[extension_type]
@@ -247,7 +248,7 @@ class GPO:
             if not force:
                 logging.error("The GPO already includes a Files.xml.")
                 logging.error("Use -f to append to Files.xml")
-                logging.error("Use -v to display existing tasks")
+                logging.error("Use -v to display existing files")
                 for file in files:
                     logging.warning(f"src: {file[0]} dst: {file[1]} ")
                 return False
@@ -275,6 +276,74 @@ class GPO:
         self._smb_session.closeFile(tid, fid)
 
         if self.update_versions(domain, gpo_id, gpo_type, "file"):
+            logging.info("Version updated")
+        else:
+            logging.error("Error while updating versions")
+
+        return True
+
+    def update_service(self, domain, gpo_id, gpo_type, service_name, mod_date="", force=False):
+
+        try:
+            tid = self._smb_session.connectTree("SYSVOL")
+            logging.debug("Connected to SYSVOL")
+        except:
+            logging.error("Unable to connect to SYSVOL share", exc_info=True)
+            return False
+
+        path = domain + "/Policies/{" + gpo_id + "}/"
+
+        try:
+            self._smb_session.listPath("SYSVOL", path)
+            logging.debug("GPO id {} exists".format(gpo_id))
+        except:
+            logging.error("GPO id {} does not exist".format(gpo_id), exc_info=True)
+            return False
+
+        root_path = gpo_type
+
+        if not self._check_or_create(path, "{}/Preferences/Services".format(root_path)):
+            return False
+
+        path += "{}/Preferences/Services/Services.xml".format(root_path)
+
+        try:
+            fid = self._smb_session.openFile(tid, path)
+            st_content = self._smb_session.readFile(tid, fid, singleCall=False).decode("utf-8")
+            st = Service(service_name, mod_date=mod_date, old_value=st_content)
+            services = st.parse_services(st_content)
+
+            if not force:
+                logging.error("The GPO already includes a Services.xml.")
+                logging.error("Use -f to append to Services.xml")
+                logging.error("Use -v to display existing services")
+                for service in services:
+                    logging.warning(f"service name: {service}")
+                return False
+
+            new_content = st.generate_service_xml()
+        except Exception as e:
+            # File does not exist
+            logging.debug("Services.xml does not exist. Creating it...")
+            try:
+                fid = self._smb_session.createFile(tid, path)
+                logging.debug("Services.xml created")
+            except:
+                logging.error("This user doesn't seem to have the necessary rights", exc_info=True)
+                return False
+            st = Service(service_name, mod_date=mod_date)
+            new_content = st.generate_service_xml()
+
+        try:
+            self._smb_session.writeFile(tid, fid, new_content)
+            logging.debug("Services.xml has been saved")
+        except:
+            logging.error("This user doesn't seem to have the necessary rights", exc_info=True)
+            self._smb_session.closeFile(tid, fid)
+            return False
+        self._smb_session.closeFile(tid, fid)
+
+        if self.update_versions(domain, gpo_id, gpo_type, "service"):
             logging.info("Version updated")
         else:
             logging.error("Error while updating versions")

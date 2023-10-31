@@ -48,12 +48,17 @@ scheduled_task_parser.add_argument('-command', action='store', help='Command to 
 scheduled_task_parser.add_argument('-f', action='store_true', help='Force add ScheduleTask')
 
 # Create file subparser
-create_file_parser = action_subparsers.add_parser("create_file", help="Create file")
+create_file_parser = action_subparsers.add_parser("file", help="Create file")
 create_file_parser.add_argument('-source-path', '-s', nargs=1, type=str, action='store', required=True, help='Source file path to be copied')
 create_file_parser.add_argument('-destination-path', '-d', nargs=1, type=str, action='store', required=True, help='destionation file path')
 create_file_parser.add_argument('-mod-date', action='store', help='Task modification date (Default: 30 days before)')
-create_file_parser.add_argument('-f', action='store_true', help='Force add ScheduleTask')
+create_file_parser.add_argument('-f', action='store_true', help='Force add File')
 
+# Restart service subparser
+restart_service_parser = action_subparsers.add_parser("service", help="Restart service")
+restart_service_parser.add_argument('-service-name', '-s', nargs=1, type=str, action='store', required=True, help='The name of the service')
+restart_service_parser.add_argument('-mod-date', action='store', help='Task modification date (Default: 30 days before)')
+restart_service_parser.add_argument('-f', action='store_true', help='Force add Service')
 
 if len(sys.argv) == 1:
     parser.print_help()
@@ -147,7 +152,7 @@ try:
         )
         if result:
             logging.success(f"ScheduledTask {options.taskname} created!")
-    elif options.action == 'create_file':
+    elif options.action == 'file':
         result = gpo.update_file(
             domain=domain,
             gpo_id=options.gpo_id,
@@ -159,6 +164,21 @@ try:
         )
         if result:
             logging.success("File gpo created!")
+    elif options.action == 'service':
+        if options.gpo_type == 'User':
+            raise Exception('gpo type User is not supported for services')
+
+        result = gpo.update_service(
+            domain=domain,
+            gpo_id=options.gpo_id,
+            gpo_type=options.gpo_type,
+            service_name=options.service_name[0],
+            mod_date=options.mod_date,
+            force=options.f
+        )
+        if result:
+            logging.success("Service gpo created!")
+
 
 except Exception:
     logging.error("An error occurred. Use -vv for more details", exc_info=True)
