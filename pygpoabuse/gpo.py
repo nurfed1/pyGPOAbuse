@@ -4,6 +4,9 @@ import re
 from pygpoabuse.scheduledtask import ScheduledTask
 from pygpoabuse.file import File
 from pygpoabuse.ldap import Ldap
+from IPython import embed
+import nest_asyncio
+nest_asyncio.apply()
 
 
 class GPO:
@@ -38,12 +41,29 @@ class GPO:
             # extension exists
             return extension_names
 
-        extension_list, *assignments = extension_names[1:-1].split('][')
+        extension_list = extension_names[1:-1].split('][')
+        extension_list.append(assignment)
 
-        extension_list += extension_guid
-        assignments.append(assignment)
+        found = False
+        for i in range(len(extension_list)):
+            assignment = extension_list[i]
+            if assignment.startswith(nullguid):
+                found = True
+                break
+                print(i, assignment)
 
-        extension_names = f'[{extension_list}][{ "][".join(assignments) }]'
+        if found is False:
+            extension_list.append(f"{nullguid}{extension_guid}")
+        else:
+            extension_guids = [f"{{{extension}}}" for extension in assignment[1:-1].split('}{')]
+            extension_guids.append(extension_guid)
+            extension_guids = sorted(extension_guids)
+            extension_list[i] = ''.join(extension_guids)
+
+        extension_list = sorted(extension_list)
+        extension_names = '[' + ']['.join(extension_list) + ']'
+
+        embed(using='asyncio')
 
         return extension_names
 
@@ -75,6 +95,7 @@ class GPO:
         if extension_names == ' ':
             extension_names = None
 
+        logging.debug("Old extensionName: {}".format(extension_names))
         updated_extension_names = self.update_extension_names(extension_type, extension_names)
 
         logging.debug("New extensionName: {}".format(updated_extension_names))
