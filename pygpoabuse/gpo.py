@@ -4,9 +4,6 @@ import re
 from pygpoabuse.scheduledtask import ScheduledTask
 from pygpoabuse.file import File
 from pygpoabuse.ldap import Ldap
-from IPython import embed
-import nest_asyncio
-nest_asyncio.apply()
 
 
 class GPO:
@@ -62,8 +59,6 @@ class GPO:
 
         extension_list = sorted(extension_list)
         extension_names = '[' + ']['.join(extension_list) + ']'
-
-        embed(using='asyncio')
 
         return extension_names
 
